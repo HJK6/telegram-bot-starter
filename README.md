@@ -94,37 +94,18 @@ The dashboard runs alongside the bot at `http://localhost:8080` and provides:
 | GET | `/api/agents/<id>/chat` | Get chat history |
 | GET | `/api/agents/<id>/logs` | Get agent logs |
 
-## Plugging In Your Own Agent Logic
+## How It Works
 
-The default `_process_message` in `orchestrator.py` just echoes messages back. Replace it with your own logic:
+Each agent runs `claude -p` (Claude Code CLI) as a subprocess. When a message comes in:
 
-```python
-async def _process_message(self, agent: Agent, text: str):
-    agent.status = "busy"
-    agent.conversation_history.append({"role": "user", "text": text, "ts": _now()})
-    store.save_agent(agent)
+1. The orchestrator routes it to the right agent (or creates a new one)
+2. A prompt is built from the agent's goal + conversation history
+3. `claude -p --output-format stream-json` runs and returns a response
+4. The response is sent back to Telegram and logged in the dashboard
 
-    # ── Your logic here ─────────────────────────────
-    # Option A: Call an LLM
-    # response = await call_openai(agent.goal, agent.conversation_history)
-    #
-    # Option B: Run a subprocess
-    # result = subprocess.run(["python", "task.py", text], capture_output=True)
-    # response = result.stdout.decode()
-    #
-    # Option C: Call an external API
-    # response = requests.post("https://api.example.com/...", json={...}).text
-    # ────────────────────────────────────────────────
-
-    response = f"Agent [{agent.title}] received: {text}"
-
-    agent.status = "idle"
-    agent.conversation_history.append({"role": "agent", "text": response, "ts": _now()})
-    store.save_agent(agent)
-
-    self._record_chat(agent.agent_id, response, "outbound", agent.title)
-    if self._message_callback:
-        await self._message_callback(agent.agent_id, f"[{agent.title}] {response}")
+**Prerequisite:** [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) must be installed:
+```bash
+npm install -g @anthropic-ai/claude-code
 ```
 
 ## Extending

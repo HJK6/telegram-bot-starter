@@ -14,6 +14,7 @@ Architecture:
 
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import re
 import subprocess
@@ -24,6 +25,8 @@ from models import Agent, LogEntry, ChatMessage, _now
 import store
 
 log = logging.getLogger(__name__)
+
+CLAUDE_CMD = ["claude", "-p", "--output-format", "stream-json"]
 
 
 class Orchestrator:
@@ -208,43 +211,111 @@ class Orchestrator:
 
     async def _process_message(self, agent: Agent, text: str):
         """
-        Process a message for an agent.
+        Process a message by sending it to Claude via `claude -p`.
 
-        Override this method to plug in your actual agent logic:
-        - Call an LLM API (OpenAI, Anthropic, Ollama)
-        - Run a shell command
-        - Execute a workflow
-
-        The default implementation echoes the message back.
+        Builds a prompt from the agent's goal + conversation history,
+        runs Claude as a subprocess, and streams the result back.
         """
         agent.status = "busy"
         agent.current_task = f"Processing: {text[:60]}"
         agent.conversation_history.append({"role": "user", "text": text, "ts": _now()})
         store.save_agent(agent)
+        self._log(agent.agent_id, "info", f"Processing: {text[:80]}")
 
-        # ┌──────────────────────────────────────────────────────┐
-        # │  REPLACE THIS with your agent logic.                 │
-        # │                                                      │
-        # │  Examples:                                           │
-        # │    response = await call_openai(agent.goal, text)    │
-        # │    response = await call_anthropic(agent.goal, text) │
-        # │    response = run_ollama(agent.goal, text)           │
-        # │    response = subprocess.run(["claude", ...])        │
-        # └──────────────────────────────────────────────────────┘
-        response = f"Agent [{agent.title}] received: {text}"
+        prompt = self._build_prompt(agent, text)
+
+        # Run Claude in a thread to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, self._run_claude, agent, prompt)
 
         agent.status = "idle"
         agent.current_task = ""
         agent.last_heartbeat = _now()
         agent.conversation_history.append({"role": "agent", "text": response, "ts": _now()})
-        store.save_agent(agent)
 
+        # Keep history from growing unbounded
+        if len(agent.conversation_history) > 40:
+            agent.conversation_history = agent.conversation_history[-30:]
+
+        store.save_agent(agent)
         self._record_chat(agent.agent_id, response, "outbound", agent.title)
         self._last_sender_id = agent.agent_id
 
         if self._message_callback:
             tagged = f"[{agent.title}] {response}"
             await self._message_callback(agent.agent_id, tagged)
+
+    def _build_prompt(self, agent: Agent, latest_message: str) -> str:
+        """Build the full prompt with goal + history for Claude."""
+        parts = [f"Goal: {agent.goal}\n"]
+
+        # Include recent conversation history for context
+        recent = agent.conversation_history[-20:]
+        if len(recent) > 1:  # more than just the message we just appended
+            parts.append("Conversation history:")
+            for msg in recent[:-1]:  # exclude the latest (it's the current message)
+                role = "User" if msg["role"] == "user" else "Agent"
+                parts.append(f"  {role}: {msg['text']}")
+            parts.append("")
+
+        parts.append(f"User: {latest_message}")
+        return "\n".join(parts)
+
+    def _run_claude(self, agent: Agent, prompt: str) -> str:
+        """
+        Run `claude -p` as a subprocess and return the response text.
+
+        Reads stream-json output to extract the final result.
+        Falls back to raw stdout on parse errors.
+        """
+        try:
+            proc = subprocess.run(
+                CLAUDE_CMD + [prompt],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+
+            if proc.returncode != 0:
+                error = proc.stderr.strip() or f"Exit code {proc.returncode}"
+                self._log(agent.agent_id, "error", f"Claude error: {error}")
+                return f"Error: {error}"
+
+            # Parse stream-json — look for the result message
+            response_text = ""
+            for line in proc.stdout.strip().splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if event.get("type") == "result":
+                    response_text = event.get("result", "")
+                    break
+                elif event.get("type") == "assistant":
+                    # Accumulate assistant text chunks
+                    message = event.get("message", {})
+                    if isinstance(message, dict):
+                        for block in message.get("content", []):
+                            if block.get("type") == "text":
+                                response_text = block.get("text", "")
+
+            if not response_text:
+                # Fallback: treat raw stdout as the response
+                response_text = proc.stdout.strip()[:4000] or "(no response)"
+
+            self._log(agent.agent_id, "info", f"Response: {response_text[:100]}...")
+            return response_text
+
+        except subprocess.TimeoutExpired:
+            self._log(agent.agent_id, "error", "Claude timed out (120s)")
+            return "Error: Claude timed out."
+        except FileNotFoundError:
+            self._log(agent.agent_id, "error", "Claude CLI not found — install with: npm install -g @anthropic-ai/claude-code")
+            return "Error: `claude` CLI not found. Install it with: npm install -g @anthropic-ai/claude-code"
+        except Exception as e:
+            self._log(agent.agent_id, "error", f"Unexpected error: {e}")
+            return f"Error: {e}"
 
     # ── Dashboard commands ──────────────────────────────────────
 
