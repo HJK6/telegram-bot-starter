@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="header">
+  <h1>Agent Dashboard</h1>
+  <span style="color: var(--muted); font-size: 13px;">{{ stats.total }} agent(s)</span>
+</div>
+
+<!-- Stats -->
+<div class="stats">
+  <div class="stat">
+    <div class="value" style="color: var(--green);">{{ stats.busy }}</div>
+    <div class="label">Busy</div>
+  </div>
+  <div class="stat">
+    <div class="value" style="color: var(--blue);">{{ stats.idle }}</div>
+    <div class="label">Idle</div>
+  </div>
+  <div class="stat">
+    <div class="value" style="color: var(--muted);">{{ stats.stopped }}</div>
+    <div class="label">Stopped</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ stats.total }}</div>
+    <div class="label">Total</div>
+  </div>
+</div>
+
+<!-- New agent form -->
+<div class="panel">
+  <h3>New Agent</h3>
+  <form method="POST" action="/action/new">
+    <div class="form-row">
+      <input type="text" name="goal" placeholder="Describe the agent's goal..." required>
+      <button type="submit" class="btn btn-primary">Create</button>
+    </div>
+  </form>
+</div>
+
+<!-- Agent cards -->
+{% if agents %}
+<div class="agents-grid">
+  {% for agent in agents %}
+  <div class="card">
+    <div class="card-header">
+      <a href="/agent/{{ agent.agent_id }}" class="card-title">{{ agent.title or '(untitled)' }}</a>
+      <span class="badge badge-{{ agent.status }}">{{ agent.status }}</span>
+    </div>
+    <div class="card-id">{{ agent.short_id }}</div>
+    <div class="card-goal">{{ agent.goal[:120] }}{% if agent.goal|length > 120 %}...{% endif %}</div>
+    <div class="card-meta">
+      Uptime: {{ agent.uptime }}
+      {% if agent.current_task %} &middot; Task: {{ agent.current_task[:50] }}{% endif %}
+    </div>
+    <div class="card-actions">
+      <a href="/agent/{{ agent.agent_id }}" class="btn">Detail</a>
+      {% if agent.status in ('idle', 'busy') %}
+      <form method="POST" action="/action/stop/{{ agent.agent_id }}" style="display:inline;">
+        <button type="submit" class="btn btn-danger">Stop</button>
+      </form>
+      {% endif %}
+      <form method="POST" action="/action/delete/{{ agent.agent_id }}" style="display:inline;"
+            onsubmit="return confirm('Delete this agent?');">
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">No agents yet. Create one above or send a message via Telegram.</div>
+{% endif %}
+{% endblock %}

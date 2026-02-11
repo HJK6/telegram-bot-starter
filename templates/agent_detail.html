@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ agent.title }} — Dashboard{% endblock %}
+
+{% block content %}
+<a href="/" class="back">&larr; Back to dashboard</a>
+
+<div class="header">
+  <div>
+    <h1>{{ agent.title or '(untitled)' }}</h1>
+    <div style="color: var(--muted); font-size: 13px; margin-top: 4px;">
+      <code>{{ agent.agent_id }}</code> &middot;
+      <span class="badge badge-{{ agent.status }}">{{ agent.status }}</span> &middot;
+      Uptime: {{ agent.uptime }}
+    </div>
+  </div>
+  <div style="display: flex; gap: 8px;">
+    {% if agent.status in ('idle', 'busy') %}
+    <form method="POST" action="/action/stop/{{ agent.agent_id }}">
+      <button type="submit" class="btn btn-danger">Stop</button>
+    </form>
+    {% endif %}
+    <form method="POST" action="/action/delete/{{ agent.agent_id }}"
+          onsubmit="return confirm('Delete this agent and all its data?');">
+      <button type="submit" class="btn btn-danger">Delete</button>
+    </form>
+  </div>
+</div>
+
+<!-- Goal -->
+<div class="panel">
+  <h3>Goal</h3>
+  <div style="font-size: 14px; line-height: 1.5;">{{ agent.goal }}</div>
+  {% if agent.current_task %}
+  <div style="margin-top: 8px; font-size: 13px; color: var(--muted);">
+    Current task: {{ agent.current_task }}
+  </div>
+  {% endif %}
+</div>
+
+<!-- Chat -->
+<div class="panel">
+  <h3>Chat</h3>
+  {% if chat %}
+    {% for msg in chat %}
+    <div class="chat-msg chat-{{ msg.direction }}">
+      <span class="sender">{{ msg.sender }}</span>
+      <span class="time">{{ msg.timestamp[11:19] }}</span>
+      <div>{{ msg.text }}</div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty">No messages yet.</div>
+  {% endif %}
+
+  <!-- Send message form -->
+  {% if agent.status in ('idle', 'busy') %}
+  <form method="POST" action="/action/send/{{ agent.agent_id }}">
+    <div class="form-row">
+      <input type="text" name="message" placeholder="Send a message to this agent..." required>
+      <button type="submit" class="btn btn-primary">Send</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+
+<!-- Logs -->
+<div class="panel">
+  <h3>Logs</h3>
+  {% if logs %}
+    {% for entry in logs %}
+    <div class="log-entry log-{{ entry.level }}">
+      <span class="time">{{ entry.timestamp[11:19] }}</span>
+      [{{ entry.level }}] {{ entry.message }}
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty">No logs yet.</div>
+  {% endif %}
+</div>
+{% endblock %}
